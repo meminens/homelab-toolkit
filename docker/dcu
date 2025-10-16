@@ -11,14 +11,13 @@
 #                                                                                #
 #  Features:                                                                     #
 #    - Manage all services at once or target specific ones.                      #
-#    - Comprehensive status view of all running containers and compose services. #
-#    - Intelligent update checker with interactive selection for applying        #
-#      updates.                                                                  #
+#    - Comprehensive status view of all containers and compose services.         #
+#    - Interactive update checker.                                               #
 #    - Parallel processing for faster status and update checks.                  #
 #    - Color-coded output for improved readability.                              #
 #    - Progress bars for long-running operations.                                #
 #                                                                                #
-#  Author: meminens & varios LLMs                                                #
+#  Author: meminens@github & varios LLMs                                         #
 #  License: MIT                                                                  #
 #                                                                                #
 #================================================================================#
@@ -27,34 +26,21 @@
 # SCRIPT CONFIGURATION
 #--------------------------------------------------------------------------------#
 
-# The default base directory where Docker Compose projects are located.
-# This can be overridden by setting the `DCU_BASE_DIR` environment variable.
-# e.g., `export DCU_BASE_DIR="/srv/docker"`
 DEFAULT_BASE_DIR="$HOME/Docker/Hub"
 BASE_DIR="${DCU_BASE_DIR:-$DEFAULT_BASE_DIR}"
-
-# The maximum number of parallel jobs to run for tasks like update checks.
-# Set to 0 to disable parallel processing.
 MAX_PARALLEL_JOBS=16
-
-# Set to a non-empty string to suppress informational log messages. Errors and
-# warnings will still be displayed. Set to "" or unset to enable verbose logging.
-DCU_QUIET=1
 
 #--------------------------------------------------------------------------------#
 # GLOBAL VARIABLES & STYLES
 #--------------------------------------------------------------------------------#
 
-# ANSI color codes for styled output.
 GREEN='\033[32m'
 RED='\033[31m'
 BLUE='\033[34m'
 YELLOW='\033[33m'
 CYAN='\033[36m'
-BOLD='\033[1m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Global arrays to track the outcome of operations for summary reports.
 declare -a FAILED_SERVICES=()
 declare -a SUCCESS_SERVICES=()
 declare -a SELECTED_SERVICES=()
@@ -63,15 +49,6 @@ declare -a SELECTED_SERVICES=()
 # HELPER & UTILITY FUNCTIONS
 #--------------------------------------------------------------------------------#
 
-###
-# Parses user input from the interactive update menu.
-# Handles single numbers, comma-separated lists, and ranges.
-# Populates the global SELECTED_SERVICES array with unique service names.
-#
-# @param string $1 - The user's raw selection string (e.g., "1,3,5").
-# @param array  $@ - The list of all available services for selection.
-# @return 0 on success, 1 on parsing error.
-###
 parse_selection() {
     local selection="$1"
     shift
@@ -79,15 +56,12 @@ parse_selection() {
     
     SELECTED_SERVICES=()
     
-    # Split the selection by commas to handle multiple entries.
     IFS=',' read -ra PARTS <<< "$selection"
     for part in "${PARTS[@]}"; do
-        # Trim whitespace
         part=$(echo "$part" | tr -d ' ')
         
-        # Check if the part is a valid number.
         if [[ "$part" =~ ^[0-9]+$ ]]; then
-            local index=$((part - 1)) # Convert 1-based to 0-based index.
+            local index=$((part - 1))
             if [[ $index -ge 0 && $index -lt ${#available_services[@]} ]]; then
                 SELECTED_SERVICES+=("${available_services[$index]}")
             else
@@ -100,7 +74,6 @@ parse_selection() {
         fi
     done
     
-    # Ensure the final list of selected services is unique.
     local -a unique_services=()
     for service in "${SELECTED_SERVICES[@]}"; do
         if [[ ! " ${unique_services[*]} " =~ " ${service} " ]]; then
@@ -112,43 +85,16 @@ parse_selection() {
     return 0
 }
 
-# --- Logging Functions ---
-
-# Logs an informational message. Suppressed if DCU_QUIET is set.
-log_info() {
-    if [[ -n "$DCU_QUIET" ]]; then return; fi
-    echo -e "${BLUE}[INFO]  $(date '+%Y-%m-%d %H:%M:%S') - $*${NC}"
-}
-
-# Logs a warning message. Suppressed if DCU_QUIET is set.
 log_warn() {
-    if [[ -n "$DCU_QUIET" ]]; then return; fi
     echo -e "${YELLOW}[WARN]  $(date '+%Y-%m-%d %H:%M:%S') - $*${NC}"
 }
 
-# Logs a success message. Suppressed if DCU_QUIET is set.
-log_success() {
-    if [[ -n "$DCU_QUIET" ]]; then return; fi
-    echo -e "${GREEN}[INFO]  $(date '+%Y-%m-%d %H:%M:%S') - $*${NC}"
-}
-
-# Logs an error message. Suppressed if DCU_QUIET is set.
 log_error() {
-    if [[ -n "$DCU_QUIET" ]]; then return; fi
     echo -e "${RED}[ERROR] $(date '+%Y-%m-%d %H:%M:%S') - $*${NC}"
 }
 
-###
-# Finds the correct Docker Compose file in a given directory.
-# It searches for standard compose file names in a preferred order.
-#
-# @param string $1 - The directory to search in.
-# @output The name of the found compose file (e.g., "compose.yml").
-# @return 0 if a file is found, 1 otherwise.
-###
 find_compose_file() {
     local dir="$1"
-    # Search order reflects modern (compose.yml) and legacy (docker-compose.yml) naming.
     for file in docker-compose.yml docker-compose.yaml compose.yaml compose.yml; do
         if [[ -f "$dir/$file" ]]; then
             echo "$file"
@@ -158,12 +104,6 @@ find_compose_file() {
     return 1
 }
 
-###
-# Renders a simple text-based progress bar.
-#
-# @param int $1 - The current progress value.
-# @param int $2 - The total value.
-###
 progress_bar() {
     local current="$1"
     local total="$2"
@@ -172,15 +112,12 @@ progress_bar() {
     local completed=$((width * percent / 100))
     local remaining=$((width - completed))
     
-    # Build the bar strings.
     local bar_completed=$(printf "%${completed}s" | tr " " "#")
     local bar_remaining=$(printf "%${remaining}s" | tr " " "-")
     
-    # Print the bar. Use carriage return `\r` to overwrite the line.
     if [[ "$current" != "$total" ]]; then
         printf "\r[%s%s] %s/%s " "$bar_completed" "$bar_remaining" "$current" "$total"
     else
-        # When complete, print a newline to finish the line.
         printf "\r[%s%s] %s/%s \n" "$bar_completed" "$bar_remaining" "$current" "$total"
     fi
 }
@@ -189,14 +126,6 @@ progress_bar() {
 # UPDATE FUNCTIONALITY
 #--------------------------------------------------------------------------------#
 
-###
-# Applies updates to a list of user-selected services.
-# This function is called after the user makes a selection in the interactive menu.
-#
-# @param string $1 - The base directory for services.
-# @param array  $@ - The names of the services to update.
-# @return 1 if no services were selected, 0 otherwise.
-###
 apply_selected_updates() {
     local BASE_DIR="$1"
     shift
@@ -207,7 +136,6 @@ apply_selected_updates() {
         return 1
     fi
     
-    # Reset global tracking arrays before starting.
     FAILED_SERVICES=()
     SUCCESS_SERVICES=()
     
@@ -216,10 +144,8 @@ apply_selected_updates() {
         
         echo -e "${CYAN}Updating $service${NC}"
         
-        # Use a temporary file to capture the status from the subshell.
         local status_file=$(mktemp)
         
-        # Run the update process in a subshell to isolate directory changes.
         (
             cd "$service_dir" || exit 1
             
@@ -230,20 +156,16 @@ apply_selected_updates() {
                 exit 1
             fi
             
-            # The standard update procedure: down, pull, up.
-            log_info "Stopping services..."
             if ! docker compose -f "$compose_file" down --remove-orphans; then
                 echo "ERROR:$service:Failed to stop" > "$status_file"
                 exit 1
             fi
 
-            log_info "Pulling latest images..."
             if ! docker compose -f "$compose_file" pull; then
                 echo "ERROR:$service:Failed to pull" > "$status_file"
                 exit 1
             fi
 
-            log_info "Starting services..."
             if ! docker compose -f "$compose_file" up -d --remove-orphans; then
                 echo "ERROR:$service:Failed to restart" > "$status_file"
                 exit 1
@@ -252,7 +174,6 @@ apply_selected_updates() {
             echo "SUCCESS:$service" > "$status_file"
         )
         
-        # Process the result from the subshell.
         local result=$(cat "$status_file")
         rm -f "$status_file"
         
@@ -262,17 +183,14 @@ apply_selected_updates() {
         case "$status" in
             "SUCCESS")
                 SUCCESS_SERVICES+=("$service_name")
-                log_success "$service_name updated successfully"
                 ;;
             "ERROR")
                 FAILED_SERVICES+=("$service_name")
                 local error_msg=$(echo "$result" | cut -d: -f3-)
-                log_error "Failed to update $service_name: $error_msg"
                 ;;
         esac
     done
     
-    # Print a final summary of the update operation.
     if [[ ${#SUCCESS_SERVICES[@]} -gt 0 ]]; then
         echo ""
         echo -e "${GREEN}Updated services:${NC}"
@@ -289,18 +207,6 @@ apply_selected_updates() {
     fi
 }
 
-###
-# Checks a single Docker Compose service for available image updates.
-# It compares the local image digest with the remote digest from the registry.
-# This requires `regctl` and `jq` to be installed.
-#
-# @param string $1 - The name of the service.
-# @param string $2 - The full path to the service's directory.
-# @output A formatted string indicating the status:
-#         - "UPDATES_AVAILABLE:<service_name>:<details>"
-#         - "UP_TO_DATE:<service_name>"
-#         - "ERROR:<service_name>:<message>"
-###
 check_service_updates() {
     local service_name="$1"
     local service_dir="$2"
@@ -314,7 +220,6 @@ check_service_updates() {
         return 1
     fi
     
-    # `regctl` is used for reliable registry communication.
     local regctl_bin=""
     if command -v regctl >/dev/null 2>&1; then
         regctl_bin="regctl"
@@ -323,7 +228,6 @@ check_service_updates() {
         return 1
     fi
     
-    # Parse the compose file as JSON to extract service images.
     local services_json
     services_json=$(docker compose -f "$compose_file" config --format json 2>/dev/null)
     
@@ -335,21 +239,17 @@ check_service_updates() {
     local update_info=""
     local updates_available=false
     
-    # Use jq to extract service names and their corresponding image names.
     local services_data
     services_data=$(echo "$services_json" | jq -r '.services | to_entries[] | "\(.key)|\(.value.image // "unknown")"' 2>/dev/null)
     
     if [[ -n "$services_data" ]]; then
-        # Iterate over each service defined in the compose file.
         while IFS='|' read -r compose_service image; do
             [[ -z "$compose_service" || -z "$image" ]] && continue
             
-            # Default to 'latest' tag if none is specified.
             if [[ "$image" != *":"* ]]; then
                 image="$image:latest"
             fi
             
-            # Skip check if the service's containers are not running.
             local running_containers
             running_containers=$(docker compose -f "$compose_file" ps -q "$compose_service" 2>/dev/null)
             if [[ -z "$running_containers" ]]; then
@@ -360,20 +260,16 @@ check_service_updates() {
                 continue
             fi
             
-            # Get the local image digest(s).
             local local_hash
             local_hash=$(docker image inspect "$image" --format '{{.RepoDigests}}' 2>/dev/null)
             
-            # Get the remote image digest using regctl.
             local remote_hash
             if remote_hash=$(timeout 10 $regctl_bin -v error image digest --list "$image" 2>/dev/null); then
-                # If the remote hash is found and not present in local digests, an update is available.
                 if [[ -n "$remote_hash" ]] && [[ "$local_hash" != *"$remote_hash"* ]]; then
                     update_info="${update_info}    ${CYAN}$compose_service:${NC} $image\n"
                     updates_available=true
                 fi
             else
-                # Handle cases where the registry check fails (e.g., private registry, rate limit).
                 update_info="${update_info}    ${YELLOW}$compose_service:${NC} $image\n"
             fi
             
@@ -389,22 +285,12 @@ check_service_updates() {
     return 0
 }
 
-# Export functions and variables so they are available to subshells created by `xargs`.
 export -f check_service_updates find_compose_file
 export BASE_DIR YELLOW NC CYAN GREEN RED BLUE
 
-###
-# The main function for the `update` command.
-# It finds all services, checks them for updates in parallel, displays the
-# results, and prompts the user for action if updates are available.
-#
-# @param string $1 - The base directory for services.
-# @return 1 on dependency error, 0 otherwise.
-###
 check_all_updates() {
     local BASE_DIR="$1"
     
-    # Check for required command-line tools.
     if ! command -v regctl >/dev/null 2>&1; then
         log_error "regctl not found. Install regctl for reliable update checking:"
         log_error "e.g., sudo pacman -S regclient"
@@ -416,7 +302,6 @@ check_all_updates() {
         return 1
     fi
     
-    # Find all directories containing a compose file.
     local services=()
     cd "$BASE_DIR" || return 1
     for dir in */; do
@@ -429,9 +314,7 @@ check_all_updates() {
         log_warn "No Docker Compose services found in $BASE_DIR"
         return 0
     fi
-    
-    log_info "Checking ${#services[@]} services for updates"
-    
+        
     local total_count=${#services[@]}
     local services_with_updates=()
     local processed_count=0
@@ -442,7 +325,6 @@ check_all_updates() {
     local -a GotUpdates=()
     local -a GotErrors=()
     
-    # Use `xargs -P` for parallel execution if available.
     local XargsAsync=""
     if (echo "test" | xargs -P 2 >/dev/null 2>&1) && [[ "$MAX_PARALLEL_JOBS" != 0 ]]; then
         XargsAsync="-P $MAX_PARALLEL_JOBS"
@@ -451,7 +333,6 @@ check_all_updates() {
         log_warn "Missing POSIX xargs support for parallelism, falling back to sequential processing."
     fi
     
-    # Process the output from the parallel checker.
     while read -r line; do
         ((processed_count++))
         progress_bar "$processed_count" "$total_count"
@@ -460,7 +341,6 @@ check_all_updates() {
         local service_name=$(echo "$line" | cut -d: -f2)
         local details=$(echo "$line" | cut -d: -f3-)
         
-        # Categorize results.
         case "$status" in
             UPDATES_AVAILABLE) GotUpdates+=("$service_name:$details") ;;
             UP_TO_DATE) NoUpdates+=("$service_name") ;;
@@ -468,11 +348,9 @@ check_all_updates() {
             *) log_error "Unexpected output: $line" ;;
         esac
     done < <(
-        # The core parallel execution command.
         printf '%s\n' "${services[@]}" | xargs $XargsAsync -I {} bash -c 'check_service_updates "{}" "$BASE_DIR/{}"'
     )
     
-    # Sort the results for consistent display.
     IFS=$'\n'
     NoUpdates=($(sort <<<"${NoUpdates[*]:-}"))
     GotUpdates=($(sort <<<"${GotUpdates[*]:-}"))
@@ -499,18 +377,15 @@ check_all_updates() {
         done
     fi
     
-    # If updates were found, show the interactive menu.
     if [[ ${#services_with_updates[@]} -gt 0 ]]; then
         echo -e "${GREEN}Select Updates:${NC}"
         
-        # Create a clean list of service names for the menu.
         local update_service_names=()
         for service in "${services_with_updates[@]}"; do
             local service_name=$(echo "$service" | cut -d: -f1)
             update_service_names+=("$service_name")
         done
         
-        # Display numbered options.
         for i in "${!update_service_names[@]}"; do
             echo -e "  ${CYAN}$((i+1))${NC}. ${update_service_names[$i]}"
         done
@@ -520,7 +395,6 @@ check_all_updates() {
             
             case "$selection" in
                 "q"|"Q")
-                    log_info "Update canceled by user."
                     return 0
                     ;;
                 "a"|"A")
@@ -549,27 +423,85 @@ check_all_updates() {
     fi
 }
 
-
 #--------------------------------------------------------------------------------#
-# SERVICE MANAGEMENT FUNCTIONS (Start, Stop, Restart, Status)
+# SERVICE MANAGEMENT FUNCTIONS
 #--------------------------------------------------------------------------------#
 
-###
-# Manages multiple Docker Compose services based on a given action (start/stop).
-# Iterates through all found services and applies the command.
-# It intelligently skips services that are already in the desired state.
-#
-# @param string $1 - The action to perform ("start" or "stop").
-# @param string $2 - The base directory for services.
-###
-process_compose_services() {
+manage_services() {
     local action=$1
-    local BASE_DIR="$2"
+    shift
+    local -a service_names=("$@")
+    
+    # If no services specified, operate on all
+    if [[ ${#service_names[@]} -eq 0 ]]; then
+        manage_all_services "$action"
+        return
+    fi
+    
+    # Operate on specific services
+    for service_name in "${service_names[@]}"; do
+        local service_dir="$BASE_DIR/$service_name"
+    
+        if [[ ! -d "$service_dir" ]]; then
+            echo -e "${RED}[ERROR] Service '$service_name' not found in $BASE_DIR${NC}"
+            continue
+        fi
+    
+        local compose_file
+        compose_file=$(find_compose_file "$service_dir")
+        if [[ $? -ne 0 ]]; then
+            echo -e "${RED}[ERROR] No compose file found for service '$service_name'${NC}"
+            continue
+        fi
+    
+        cd "$service_dir" || {
+            echo -e "${RED}[ERROR] Could not change to directory for '$service_name'${NC}"
+            continue
+        }
+
+        local is_running=false
+        if docker compose -f "$compose_file" ps -q 2>/dev/null | grep -q .; then
+            is_running=true
+        fi
+
+        if [[ "$action" == "start" && "$is_running" == true ]]; then
+            echo -e "${GREEN}✔ No action taken. '$service_name' is already running.${NC}"
+            continue
+        fi
+        if [[ "$action" == "stop" && "$is_running" == false ]]; then
+            echo -e "${GREEN}✔ No action taken. '$service_name' is already stopped.${NC}"
+            continue
+        fi
+
+        echo -e "${CYAN}>>> $service_name${NC}"
+    
+        case "$action" in
+            "start")
+                docker compose -f "$compose_file" up -d --remove-orphans
+                ;;
+            "stop")
+                docker compose -f "$compose_file" down --remove-orphans
+                ;;
+            "restart")
+                if [[ "$is_running" == true ]]; then
+                    docker compose -f "$compose_file" down --remove-orphans
+                    if [[ $? -ne 0 ]]; then
+                        echo -e "${RED}[ERROR] Failed to stop '$service_name', restart aborted.${NC}"
+                        continue
+                    fi
+                fi
+                docker compose -f "$compose_file" up -d --remove-orphans
+                ;;
+        esac
+    done
+}
+
+manage_all_services() {
+    local action=$1
     
     FAILED_SERVICES=()
     local actions_taken=0
 
-    # Discover all valid services.
     local services=()
     cd "$BASE_DIR" || return 1
     for dir in */; do
@@ -583,11 +515,11 @@ process_compose_services() {
         return 0
     fi
     
-    # Determine the docker compose command based on the action.
     local compose_command=""
     case "$action" in
         "start") compose_command="up -d --remove-orphans" ;;
         "stop") compose_command="down --remove-orphans" ;;
+        "restart") compose_command="restart" ;;
     esac
 
     for service in "${services[@]}"; do
@@ -607,13 +539,11 @@ process_compose_services() {
             continue
         fi
 
-        # Check if any containers for this compose project are running.
         local is_running=false
         if docker compose -f "$compose_file" ps -q 2>/dev/null | grep -q .; then
             is_running=true
         fi
 
-        # Skip if already in the desired state.
         if [[ "$action" == "start" && "$is_running" == true ]]; then
             continue
         elif [[ "$action" == "stop" && "$is_running" == false ]]; then
@@ -623,158 +553,45 @@ process_compose_services() {
         echo -e "${CYAN}>>> $service${NC}"
         actions_taken=$((actions_taken + 1))
         
-        # Execute the command and track failures.
-        if ! docker compose -f "$compose_file" $compose_command; then
-            FAILED_SERVICES+=("$service")
-        fi
-    done
-
-    # Provide a summary at the end.
-    if [[ ${#FAILED_SERVICES[@]} -gt 0 ]]; then
-      print_operation_summary
-    elif [[ $actions_taken -eq 0 && "$action" == "start" ]]; then
-      echo -e "${GREEN}✓ All services are already running.${NC}"
-    elif [[ $actions_taken -gt 0 && "$action" == "start" ]]; then
-      echo -e "${GREEN}✓ All services are now running.${NC}"
-    fi
-
-}
-
-###
-# Prints a summary of services that failed during a bulk operation.
-###
-print_operation_summary() {
-    echo -e "${RED}Failure Summary:${NC}"
-    
-    for service in "${FAILED_SERVICES[@]}"; do
-        echo -e "  ${RED}✗${NC} $service"
-    done
-}
-
-###
-# Manages one or more specific services for start, stop, or restart actions.
-# This function is used by the `st`, `sp`, and `rs` commands.
-#
-# @param string $1 - The action ("start", "stop", "restart").
-# @param array  $@ - A list of service names to manage.
-###
-manage_specific_services() {
-    local action=$1
-    shift
-    local -a service_names=("$@")
-    
-    # If no service names are provided, show usage and list available services.
-    if [[ ${#service_names[@]} -eq 0 ]]; then
-        local cmd_name
-        if [[ "$action" == "start" ]]; then cmd_name="st"; elif [[ "$action" == "stop" ]]; then cmd_name="sp"; else cmd_name="rs"; fi
-        
-        echo "Usage: $0 $cmd_name <service1> [service2] ..."
-        echo -e "${BLUE}Available services in $BASE_DIR:${NC}"
-        cd "$BASE_DIR" || exit 1
-        local found_services=false
-        for dir in */; do
-            # Only list directories that contain a valid compose file.
-            if find_compose_file "$dir" >/dev/null 2>&1; then
-                echo -e "  ${GREEN}•${NC} $(basename "$dir")"
-                found_services=true
-            fi
-        done
-        
-        if [[ "$found_services" == false ]]; then
-            echo -e "  ${YELLOW}No services found${NC}"
-        fi
-        exit 0
-    fi
-    
-    for service_name in "${service_names[@]}"; do
-        local service_dir="$BASE_DIR/$service_name"
-    
-        # Validate that the service directory exists.
-        if [[ ! -d "$service_dir" ]]; then
-            echo -e "${RED}[ERROR] Service '$service_name' not found in $BASE_DIR${NC}"
-            continue
-        fi
-    
-        local compose_file
-        compose_file=$(find_compose_file "$service_dir")
-        if [[ $? -ne 0 ]]; then
-            echo -e "${RED}[ERROR] No compose file found for service '$service_name'${NC}"
-            continue
-        fi
-    
-        cd "$service_dir" || {
-            echo -e "${RED}[ERROR] Could not change to directory for '$service_name'${NC}"
-            continue
-        }
-
-        # Check the current running state of the service.
-        local is_running=false
-        if docker compose -f "$compose_file" ps -q 2>/dev/null | grep -q .; then
-            is_running=true
-        fi
-
-        # Provide feedback if no action is needed.
-        if [[ "$action" == "start" && "$is_running" == true ]]; then
-            echo -e "${GREEN}✔ No action taken. '$service_name' is already running.${NC}"
-            continue
-        fi
-        if [[ "$action" == "stop" && "$is_running" == false ]]; then
-            echo -e "${GREEN}✔ No action taken. '$service_name' is already stopped.${NC}"
-            continue
-        fi
-
-        echo -e "${CYAN}>>> $service_name${NC}"
-
-        # Special handling for restarting a stopped service.
-        if [[ "$action" == "restart" && "$is_running" == false ]]; then
-            echo -e "${YELLOW}Info: Service is stopped. Starting...${NC}"
-        fi
-    
-        case "$action" in
-            "start")
-                docker compose -f "$compose_file" up -d --remove-orphans
-                ;;
-            "stop")
-                docker compose -f "$compose_file" down --remove-orphans
-                ;;
-            "restart")
-                # If running, stop it first.
-                if [[ "$is_running" == true ]]; then
-                    docker compose -f "$compose_file" down --remove-orphans
-                    if [[ $? -ne 0 ]]; then
-                        echo -e "${RED}[ERROR] Failed to stop '$service_name', restart aborted.${NC}"
-                        continue
-                    fi
+        if [[ "$action" == "restart" ]]; then
+            if [[ "$is_running" == true ]]; then
+                if ! docker compose -f "$compose_file" down --remove-orphans; then
+                    FAILED_SERVICES+=("$service")
+                    continue
                 fi
-                # Start it (or start it back up).
-                docker compose -f "$compose_file" up -d --remove-orphans
-                ;;
-        esac
+            fi
+            if ! docker compose -f "$compose_file" up -d --remove-orphans; then
+                FAILED_SERVICES+=("$service")
+            fi
+        else
+            if ! docker compose -f "$compose_file" $compose_command; then
+                FAILED_SERVICES+=("$service")
+            fi
+        fi
     done
+
+    if [[ ${#FAILED_SERVICES[@]} -gt 0 ]]; then
+        echo -e "${RED}Failure Summary:${NC}"
+        for service in "${FAILED_SERVICES[@]}"; do
+            echo -e "  ${RED}✗${NC} $service"
+        done
+    elif [[ $actions_taken -eq 0 && "$action" == "start" ]]; then
+        echo -e "${GREEN}✓ All services are already running.${NC}"
+    elif [[ $actions_taken -gt 0 && "$action" == "start" ]]; then
+        echo -e "${GREEN}✓ All services are now running.${NC}"
+    fi
 }
 
-###
-# Displays a detailed status report.
-# Includes a list of all running Docker containers, a summary of running/stopped
-# compose services, and an overall system overview.
-# Uses parallel processing to quickly check the state of all compose services.
-###
 get_enhanced_status() {
-    log_info "Gathering Docker container status and statistics"
     
-    # Section 1: All running containers, regardless of compose.
     echo -e "${GREEN}Running Containers:${NC}"
     if [[ $(docker ps -q | wc -l) -gt 0 ]]; then
         printf "%-28s %-28s %-20s\n" "NAME" "UPTIME" "PORTS"
-        # Format the output for better alignment and readability.
         docker ps --format "{{.Names}}\t{{.Status}}\t{{.Ports}}" | sort | while IFS=$'\t' read -r name status ports; do
-            # Clean up the ports string to be more human-readable.
             clean_ports=""
             if [[ -n "$ports" ]]; then
-                # Extract only externally mapped ports.
                 clean_ports=$(echo "$ports" | grep -oE '0\.0\.0\.0:([0-9]+)' | cut -d: -f2 | tr '\n' ',' | sed 's/,$//')
                 if [[ -z "$clean_ports" ]]; then
-                    # Fallback for internal ports if no external ones exist.
                     clean_ports=$(echo "$ports" | grep -oE '[0-9]+/tcp|[0-9]+/udp' | cut -d/ -f1 | tr '\n' ',' | sed 's/,$//')
                 fi
             fi
@@ -785,7 +602,6 @@ get_enhanced_status() {
         echo -e "${YELLOW}No containers currently running${NC}"
     fi
     
-    # Section 2: Status of all discovered compose services.
     local all_services=()
     cd "$BASE_DIR" || return 1
     for dir in */; do
@@ -800,7 +616,6 @@ get_enhanced_status() {
     local stopped_services=0
     local total_services=0
 
-    # Define a helper function to be used with xargs for parallel checking.
     check_service_running() {
         local service="$1"
         local service_dir="$BASE_DIR/$service"
@@ -817,15 +632,12 @@ get_enhanced_status() {
         fi
     }
 
-    # Export only what's needed for xargs subshells.
     export BASE_DIR
     export -f find_compose_file check_service_running
 
-    # Run the checks in parallel.
     local results
     results=$(printf '%s\n' "${all_services[@]}" | xargs -P ${MAX_PARALLEL_JOBS:-8} -I {} bash -c 'check_service_running "$@"' _ {})
 
-    # Process and categorize the results.
     for line in $results; do
         service="${line%%:*}"
         state="${line##*:}"
@@ -839,7 +651,6 @@ get_enhanced_status() {
         fi
     done
 
-    # Sort lists for consistent output.
     IFS=$'\n' running_list=($(sort <<<"${running_list[*]}")); unset IFS
     IFS=$'\n' stopped_list=($(sort <<<"${stopped_list[*]}")); unset IFS
 
@@ -857,7 +668,6 @@ get_enhanced_status() {
         done
     fi
     
-    # Section 3: A high-level overview.
     printf "\n${BLUE}%-20s${NC} %s\n" "Total containers:" "$(docker ps -aq | wc -l)"
     printf "${GREEN}%-20s${NC} %s\n" "Running containers:" "$(docker ps -q | wc -l)"
     printf "${BLUE}%-20s${NC} %s\n" "Total services:" "$total_services"
@@ -865,95 +675,64 @@ get_enhanced_status() {
     printf "${RED}%-20s${NC} %s\n" "Stopped services:" "$stopped_services"
 }
 
-###
-# Top-level dispatcher for global commands (start, stop, status).
-#
-# @param string $1 - The global action to perform.
-###
-manage_docker() {
-    local action=$1
-    log_info "Docker: ${action} all compose services in $BASE_DIR"
-    
-    if [[ ! -d "$BASE_DIR" ]]; then
-        log_error "Base directory '$BASE_DIR' not found. Set DCU_BASE_DIR environment variable or create the directory."
-        exit 1
-    fi
-    
-    case "$action" in
-        "stop")
-            log_info "Stopping all Docker Compose services"
-            process_compose_services "stop" "$BASE_DIR"
-            log_info "✔ All services stop operation complete"
-            ;;
-        "start")
-            log_info "Starting all Docker Compose services"
-            process_compose_services "start" "$BASE_DIR"
-            log_info "✔ All services start operation complete"
-            ;;
-        "status")
-            get_enhanced_status
-            ;;
-        *)
-            log_warn "Unsupported action: $action. Only 'start', 'stop', and 'status' are supported"
-            ;;
-    esac
-}
-
-###
-# Displays the help message and usage instructions.
-###
 show_help() {
     echo "dcu - Docker Compose Utility"
     echo "A script to simplify management of multiple Docker Compose projects."
     echo
     echo "USAGE:"
-    echo "  $0 [COMMAND] [ARGUMENTS...]"
+    echo "  $0 [COMMAND] [SERVICES...]"
     echo
     echo "COMMANDS:"
-    echo "  status          Show container status and statistics (default)"
-    echo "  start           Start all Docker Compose services"
-    echo "  stop            Stop all Docker Compose services"  
-    echo "  st <service>    Start a specific service (or multiple)"
-    echo "  sp <service>    Stop a specific service (or multiple)"
-    echo "  rs <service>    Restart a specific service (or multiple)"
-    echo "  update|up       Interactively check for and apply updates"
-    echo "  help|h          Show this help message"
+    echo "  status                    Show container status and statistics (default)"
+    echo "  start|st [services...]    Start all services or specific ones"
+    echo "  stop|sp [services...]     Stop all services or specific ones"
+    echo "  restart|rs [services...]  Restart all services or specific ones"
+    echo "  update|up                 Interactively check for and apply updates"
+    echo "  help|h                    Show this help message"
     echo
     echo "CONFIGURATION:"
     echo "  Base Directory (DCU_BASE_DIR): $BASE_DIR"
     echo "  Max Parallel Jobs: $MAX_PARALLEL_JOBS"
     echo
     echo "EXAMPLES:"
-    echo "  $0              # Show status (default action)"
-    echo "  $0 start        # Start all services"
-    echo "  $0 st webapp    # Start just the 'webapp' service"
-    echo "  $0 rs api db    # Restart the 'api' and 'db' services"
-    echo "  $0 update       # Check all services for updates"
+    echo "  $0                     # Show status (default action)"
+    echo "  $0 start               # Start all services"
+    echo "  $0 st webapp           # Start just the 'webapp' service"
+    echo "  $0 stop api db         # Stop the 'api' and 'db' services"
+    echo "  $0 rs api db           # Restart the 'api' and 'db' services"
+    echo "  $0 restart             # Restart all services"
+    echo "  $0 update              # Check all services for updates"
 }
 
 #--------------------------------------------------------------------------------#
 # SCRIPT ENTRYPOINT
 #--------------------------------------------------------------------------------#
 
-# If no arguments are provided, default to the 'status' command.
 if [[ $# -eq 0 ]]; then
-    manage_docker "status"
+    get_enhanced_status
     exit 0
 fi
 
-# Parse the first command-line argument to determine the action.
+if [[ ! -d "$BASE_DIR" ]]; then
+    log_error "Base directory '$BASE_DIR' not found. Set DCU_BASE_DIR environment variable or create the directory."
+    exit 1
+fi
+
 case "$1" in
-    start|stop|status)
-        manage_docker "$1"
+    start|st)
+        shift
+        manage_services "start" "$@"
         ;;
-    st) # Shortcut for start
-        manage_specific_services "start" "${@:2}"
+    stop|sp)
+        shift
+        manage_services "stop" "$@"
         ;;
-    sp) # Shortcut for stop
-        manage_specific_services "stop" "${@:2}"
+    restart|rs)
+        shift
+        manage_services "restart" "$@"
         ;;
-    rs) # Shortcut for restart
-        manage_specific_services "restart" "${@:2}"
+    status)
+        get_enhanced_status
         ;;
     update|up)
         check_all_updates "$BASE_DIR"
