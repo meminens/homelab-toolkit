@@ -57,23 +57,55 @@ parse_selection() {
     SELECTED_SERVICES=()
     
     IFS=',' read -ra PARTS <<< "$selection"
+    local -a exclude_indices=()
+    local -a include_indices=()
+    local has_negative=false
     for part in "${PARTS[@]}"; do
         part=$(echo "$part" | tr -d ' ')
-        
-        if [[ "$part" =~ ^[0-9]+$ ]]; then
+        if [[ "$part" =~ ^-[0-9]+$ ]]; then
+            has_negative=true
+            local index=$(( ${part#-} - 1 ))
+            if [[ $index -ge 0 && $index -lt ${#available_services[@]} ]]; then
+                exclude_indices+=("$index")
+            else
+                echo -e "${RED}'$part' is out of range. Please choose from the listed options.${NC}"
+                return 1
+            fi
+        elif [[ "$part" =~ ^[0-9]+$ ]]; then
             local index=$((part - 1))
             if [[ $index -ge 0 && $index -lt ${#available_services[@]} ]]; then
-                SELECTED_SERVICES+=("${available_services[$index]}")
+                include_indices+=("$index")
             else
                 echo -e "${RED}'$part' is out of range. Please choose from the listed options.${NC}"
                 return 1
             fi
         else
-            echo -e "${RED}Invalid format: $part (enter 1,2,3 or 'a' for all, 'q' to exit)${NC}"
+            echo -e "${RED}Invalid format: $part (enter 1,2,3 or -2 to exclude, 'a' for all, 'q' to exit)${NC}"
             return 1
         fi
     done
-    
+
+    if [[ "$has_negative" == true ]]; then
+        # Exclude specified indices, include all others
+        for i in "${!available_services[@]}"; do
+            skip=false
+            for ex in "${exclude_indices[@]}"; do
+                if [[ "$i" == "$ex" ]]; then
+                    skip=true
+                    break
+                fi
+            done
+            if [[ "$skip" == false ]]; then
+                SELECTED_SERVICES+=("${available_services[$i]}")
+            fi
+        done
+    else
+        for i in "${include_indices[@]}"; do
+            SELECTED_SERVICES+=("${available_services[$i]}")
+        done
+    fi
+
+    # Remove duplicates
     local -a unique_services=()
     for service in "${SELECTED_SERVICES[@]}"; do
         if [[ ! " ${unique_services[*]} " =~ " ${service} " ]]; then
@@ -81,7 +113,6 @@ parse_selection() {
         fi
     done
     SELECTED_SERVICES=("${unique_services[@]}")
-    
     return 0
 }
 
